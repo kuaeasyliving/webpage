@@ -1,5 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase';
+import { login } from '../../utils/auth';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -8,25 +10,63 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    // Simulate authentication delay
-    setTimeout(() => {
-      if (username === 'Admin' && password === 'Exito2025') {
-        // Store authentication token
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('adminUser', username);
-        
-        // Redirect to dashboard
-        navigate('/admin/dashboard');
-      } else {
+    try {
+      // Buscar usuario en la tabla agents
+      const { data: agent, error: queryError } = await supabase
+        .from('agents')
+        .select('id, username, password_hash, role, first_name, last_name, is_active')
+        .eq('username', username)
+        .maybeSingle();
+
+      if (queryError) {
+        console.error('Error al consultar usuario:', queryError);
+        setError('Error al verificar credenciales');
+        setIsLoading(false);
+        return;
+      }
+
+      if (!agent) {
         setError('Credenciales inválidas');
         setIsLoading(false);
+        return;
       }
-    }, 800);
+
+      // Verificar si el usuario está activo
+      if (!agent.is_active) {
+        setError('Usuario inactivo. Contacte al administrador');
+        setIsLoading(false);
+        return;
+      }
+
+      // Verificar contraseña (en producción debería usar bcrypt)
+      // Por ahora comparación directa para mantener compatibilidad
+      if (agent.password_hash !== password) {
+        setError('Credenciales inválidas');
+        setIsLoading(false);
+        return;
+      }
+
+      // Autenticación exitosa
+      login({
+        id: agent.id,
+        username: agent.username,
+        role: agent.role as 'Administrador' | 'Agente externo' | 'Editor',
+        firstName: agent.first_name,
+        lastName: agent.last_name,
+      });
+
+      // Redirigir al dashboard
+      navigate('/admin/dashboard');
+    } catch (err) {
+      console.error('Error en login:', err);
+      setError('Error al iniciar sesión');
+      setIsLoading(false);
+    }
   };
 
   return (

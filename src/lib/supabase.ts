@@ -10,7 +10,13 @@ export interface Agent {
   first_name: string;
   last_name: string;
   phone: string;
+  email: string;
   photo_url: string | null;
+  position: string;
+  username: string;
+  password_hash: string;
+  role: 'Administrador' | 'Agente externo' | 'Editor';
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -39,4 +45,15 @@ export interface Property {
   agent: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PropertyComment {
+  id: string;
+  property_id: string;
+  agent_id: string;
+  comment: string;
+  tag: string | null;
+  created_at: string;
+  updated_at: string;
+  agent?: Agent;
 }

@@ -84,12 +84,20 @@ export default function PropertyDetail() {
         body: JSON.stringify({ neighborhood, city, department }),
       });
       const data = await res.json();
+      console.log('[nearby-places] Response status:', res.status, 'data:', JSON.stringify(data));
+      if (!res.ok) {
+        console.error('[nearby-places] Error response:', data);
+        setNearbyError(true);
+        return;
+      }
       if (data.places && data.places.length > 0) {
         setNearbyPlaces(data.places);
       } else {
+        console.warn('[nearby-places] No places returned. Full response:', data);
         setNearbyError(true);
       }
-    } catch {
+    } catch (e) {
+      console.error('[nearby-places] Fetch exception:', e);
       setNearbyError(true);
     } finally {
       setNearbyLoading(false);
@@ -389,7 +397,7 @@ export default function PropertyDetail() {
                   {property.bathrooms > 0 && (
                     <div className="flex items-center gap-3 bg-white rounded-xl p-4">
                       <div className="w-10 h-10 bg-[#d4816f]/10 rounded-lg flex items-center justify-center">
-                        <i className="ri-shower-line text-[#d4816f] text-xl w-10 h-10 flex items-center justify-center"></i>
+                        <i className="ri-drop-line text-[#d4816f] text-xl"></i>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Baños</p>

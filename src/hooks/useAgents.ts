@@ -4,24 +4,19 @@ import { supabase, Agent } from '../lib/supabase';
 export const useAgents = () => {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   const fetchAgents = async () => {
     try {
       setLoading(true);
-      setError(null);
-      
-      const { data, error: fetchError } = await supabase
+      const { data, error } = await supabase
         .from('agents')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (fetchError) throw fetchError;
-      
+      if (error) throw error;
       setAgents(data || []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al cargar agentes');
-      console.error('Error fetching agents:', err);
+    } catch (error) {
+      console.error('Error fetching agents:', error);
     } finally {
       setLoading(false);
     }
@@ -31,113 +26,189 @@ export const useAgents = () => {
     fetchAgents();
   }, []);
 
-  return { agents, loading, error, refetch: fetchAgents };
-};
+  const createAgent = async (agentData: {
+    first_name: string;
+    last_name: string;
+    phone: string;
+    email: string;
+    position: string;
+    username: string;
+    password: string;
+    role: 'Agente externo' | 'Editor';
+    is_active: boolean;
+    photo_url?: string | null;
+  }) => {
+    try {
+      const { data, error } = await supabase
+        .from('agents')
+        .insert([{
+          first_name: agentData.first_name,
+          last_name: agentData.last_name,
+          phone: agentData.phone,
+          email: agentData.email,
+          position: agentData.position,
+          username: agentData.username,
+          password_hash: agentData.password,
+          role: agentData.role,
+          is_active: agentData.is_active,
+          photo_url: agentData.photo_url || null
+        }])
+        .select()
+        .single();
 
-export const uploadAgentPhoto = async (file: File): Promise<string> => {
-  try {
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Math.random().toString(36).substring(2)}-${Date.now()}.${fileExt}`;
-    const filePath = `${fileName}`;
+      if (error) throw error;
+      await fetchAgents();
+      return { success: true, data };
+    } catch (error: any) {
+      console.error('Error creating agent:', error);
+      return { success: false, error: error.message };
+    }
+  };
 
-    const { error: uploadError } = await supabase.storage
-      .from('agent-photos')
-      .upload(filePath, file);
-
-    if (uploadError) throw uploadError;
-
-    const { data } = supabase.storage
-      .from('agent-photos')
-      .getPublicUrl(filePath);
-
-    return data.publicUrl;
-  } catch (error) {
-    console.error('Error uploading agent photo:', error);
-    throw error;
-  }
-};
-
-export const createAgent = async (agentData: {
-  first_name: string;
-  last_name: string;
-  phone: string;
-  photo_url?: string | null;
-}): Promise<Agent> => {
-  try {
-    const { data, error } = await supabase
-      .from('agents')
-      .insert([{
-        ...agentData,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }])
-      .select()
-      .single();
-
-    if (error) throw error;
-    
-    return data;
-  } catch (error) {
-    console.error('Error creating agent:', error);
-    throw error;
-  }
-};
-
-export const updateAgent = async (
-  id: string,
-  agentData: {
+  const updateAgent = async (id: string, agentData: {
     first_name?: string;
     last_name?: string;
     phone?: string;
+    email?: string;
+    position?: string;
+    username?: string;
+    password?: string;
+    role?: 'Administrador' | 'Agente externo' | 'Editor';
+    is_active?: boolean;
     photo_url?: string | null;
-  }
-): Promise<Agent> => {
-  try {
-    const { data, error } = await supabase
-      .from('agents')
-      .update({
-        ...agentData,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select()
-      .single();
+  }) => {
+    try {
+      const updateData: any = { ...agentData };
+      
+      // Si se proporciona password, actualizar password_hash
+      if (agentData.password) {
+        updateData.password_hash = agentData.password;
+        delete updateData.password;
+      }
 
-    if (error) throw error;
-    
-    return data;
-  } catch (error) {
-    console.error('Error updating agent:', error);
-    throw error;
-  }
-};
+      const { data, error } = await supabase
+        .from('agents')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
 
-export const deleteAgent = async (id: string): Promise<void> => {
-  try {
-    const { error } = await supabase
-      .from('agents')
-      .delete()
-      .eq('id', id);
+      if (error) throw error;
+      await fetchAgents();
+      return { success: true, data };
+    } catch (error: any) {
+      console.error('Error updating agent:', error);
+      return { success: false, error: error.message };
+    }
+  };
 
-    if (error) throw error;
-  } catch (error) {
-    console.error('Error deleting agent:', error);
-    throw error;
-  }
-};
+  const deleteAgent = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('agents')
+        .delete()
+        .eq('id', id);
 
-export const deleteAgentPhoto = async (photoUrl: string): Promise<void> => {
-  try {
-    const fileName = photoUrl.split('/').pop();
-    if (!fileName) return;
+      if (error) throw error;
+      await fetchAgents();
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error deleting agent:', error);
+      return { success: false, error: error.message };
+    }
+  };
 
-    const { error } = await supabase.storage
-      .from('agent-photos')
-      .remove([fileName]);
+  const updateAgentStatus = async (id: string, is_active: boolean) => {
+    try {
+      const { data, error } = await supabase
+        .from('agents')
+        .update({ is_active })
+        .eq('id', id)
+        .select()
+        .single();
 
-    if (error) throw error;
-  } catch (error) {
-    console.error('Error deleting agent photo:', error);
-    throw error;
-  }
+      if (error) throw error;
+      await fetchAgents();
+      return { success: true, data };
+    } catch (error: any) {
+      console.error('Error updating agent status:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const validateAgentCredentials = async (username: string, password: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('agents')
+        .select('*')
+        .eq('username', username)
+        .eq('password_hash', password)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (error) throw error;
+      
+      if (!data) {
+        return { success: false, error: 'Credenciales inválidas o usuario inactivo' };
+      }
+
+      return { success: true, data };
+    } catch (error: any) {
+      console.error('Error validating credentials:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const uploadAgentPhoto = async (file: File) => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+      const filePath = `agents/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('properties')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('properties')
+        .getPublicUrl(filePath);
+
+      return { success: true, url: publicUrl };
+    } catch (error: any) {
+      console.error('Error uploading photo:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const deleteAgentPhoto = async (photoUrl: string) => {
+    try {
+      const path = photoUrl.split('/properties/')[1];
+      if (!path) return { success: false, error: 'URL inválida' };
+
+      const { error } = await supabase.storage
+        .from('properties')
+        .remove([path]);
+
+      if (error) throw error;
+      return { success: true };
+    } catch (error: any) {
+      console.error('Error deleting photo:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  return {
+    agents,
+    loading,
+    fetchAgents,
+    createAgent,
+    updateAgent,
+    deleteAgent,
+    updateAgentStatus,
+    validateAgentCredentials,
+    uploadAgentPhoto,
+    deleteAgentPhoto
+  };
 };

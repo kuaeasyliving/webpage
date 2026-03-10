@@ -484,7 +484,11 @@ export default function AddPropertyPage() {
 
   const handleFiles = (files: FileList) => {
     const fileArray = Array.from(files);
+    
+    // Agregar nuevos archivos al array de imágenes
     setFormData((prev) => ({ ...prev, images: [...prev.images, ...fileArray] }));
+    
+    // Generar previews para los nuevos archivos
     fileArray.forEach((file) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -495,17 +499,24 @@ export default function AddPropertyPage() {
   };
 
   const removeImage = (index: number) => {
-    const isExisting = index < existingImageUrls.length;
-    if (isExisting) {
+    const existingCount = existingImageUrls.length;
+    
+    if (index < existingCount) {
+      // Es una imagen existente
       setExistingImageUrls((prev) => prev.filter((_, i) => i !== index));
     } else {
-      const newIdx = index - existingImageUrls.length;
+      // Es una imagen nueva
+      const newImageIndex = index - existingCount;
       setFormData((prev) => ({
         ...prev,
-        images: prev.images.filter((_, i) => i !== newIdx),
+        images: prev.images.filter((_, i) => i !== newImageIndex),
       }));
     }
+    
+    // Remover del array de previews
     setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+    
+    // Ajustar el índice de la portada si es necesario
     if (formData.coverImageIndex === index) {
       setFormData((prev) => ({ ...prev, coverImageIndex: 0 }));
     } else if (formData.coverImageIndex > index) {
@@ -525,26 +536,62 @@ export default function AddPropertyPage() {
     const newIndex = imagePreviews.findIndex((_, i) => `img-${i}` === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
 
-    // Reorder previews
+    const existingCount = existingImageUrls.length;
+    
+    // Reordenar previews
     const newPreviews = arrayMove(imagePreviews, oldIndex, newIndex);
     setImagePreviews(newPreviews);
 
-    // Reorder existing URLs
-    const newExisting = arrayMove(existingImageUrls, oldIndex, newIndex);
-    setExistingImageUrls(newExisting);
+    // Determinar si ambas imágenes son existentes o nuevas
+    const oldIsExisting = oldIndex < existingCount;
+    const newIsExisting = newIndex < existingCount;
 
-    // Reorder new files if needed
-    const existingCount = existingImageUrls.length;
-    if (oldIndex >= existingCount || newIndex >= existingCount) {
-      const fileOld = Math.max(0, oldIndex - existingCount);
-      const fileNew = Math.max(0, newIndex - existingCount);
+    if (oldIsExisting && newIsExisting) {
+      // Ambas son imágenes existentes
+      const newExisting = arrayMove(existingImageUrls, oldIndex, newIndex);
+      setExistingImageUrls(newExisting);
+    } else if (!oldIsExisting && !newIsExisting) {
+      // Ambas son imágenes nuevas
+      const oldFileIndex = oldIndex - existingCount;
+      const newFileIndex = newIndex - existingCount;
       setFormData((prev) => ({
         ...prev,
-        images: arrayMove(prev.images, fileOld, fileNew),
+        images: arrayMove(prev.images, oldFileIndex, newFileIndex),
       }));
+    } else {
+      // Mezcla entre existentes y nuevas - reorganizar todo
+      const allImages: Array<{ type: 'existing' | 'new'; data: string | File; originalIndex: number }> = [];
+      
+      // Mapear imágenes existentes
+      existingImageUrls.forEach((url, i) => {
+        allImages.push({ type: 'existing', data: url, originalIndex: i });
+      });
+      
+      // Mapear imágenes nuevas
+      formData.images.forEach((file, i) => {
+        allImages.push({ type: 'new', data: file, originalIndex: i });
+      });
+      
+      // Reordenar según el movimiento
+      const reordered = arrayMove(allImages, oldIndex, newIndex);
+      
+      // Separar de nuevo en existentes y nuevas
+      const newExistingUrls: string[] = [];
+      const newFiles: File[] = [];
+      
+      reordered.forEach((item) => {
+        if (item.type === 'existing') {
+          newExistingUrls.push(item.data as string);
+        } else {
+          newFiles.push(item.data as File);
+        }
+      });
+      
+      setExistingImageUrls(newExistingUrls);
+      setFormData((prev) => ({ ...prev, images: newFiles }));
     }
 
-    // Update cover index
+    // Actualizar índice de portada
     const coverIdx = formData.coverImageIndex;
     let newCoverIdx = coverIdx;
     if (coverIdx === oldIndex) {
