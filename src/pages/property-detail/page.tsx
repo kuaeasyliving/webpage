@@ -6,16 +6,12 @@ import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import type { Property, Agent } from '../../lib/supabase';
 import { formatPriceSupabase } from '../../hooks/useProperties';
-
-interface NearbyPlace {
-  icon: string;
-  name: string;
-  distance: string;
-  type: string;
-}
+import ResponsiveImage, { SimpleResponsiveImage } from '../../components/base/ResponsiveImage';
+import { getImageVersions } from '../../utils/imageUrlHelper';
+import { normalizeOperation } from '../../utils/slugGenerator';
 
 export default function PropertyDetail() {
-  const { id } = useParams();
+  const { slug } = useParams();
   const navigate = useNavigate();
   const [property, setProperty] = useState<Property | null>(null);
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -24,18 +20,18 @@ export default function PropertyDetail() {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
-  const [nearbyPlaces, setNearbyPlaces] = useState<NearbyPlace[]>([]);
-  const [nearbyLoading, setNearbyLoading] = useState(false);
-  const [nearbyError, setNearbyError] = useState(false);
 
   useEffect(() => {
-    if (!id) return;
+    if (!slug) return;
+    
     const fetchProperty = async () => {
       setLoading(true);
+      
+      // Consultar propiedad por slug
       const { data, error } = await supabase
         .from('properties')
         .select('*')
-        .eq('id', id)
+        .eq('slug', slug)
         .maybeSingle();
 
       if (error || !data) {
@@ -61,52 +57,19 @@ export default function PropertyDetail() {
         .select('*')
         .in('status', ['Publicado', 'Destacado'])
         .eq('operation', data.operation)
-        .neq('id', id)
+        .neq('id', data.id)
         .limit(3);
 
       setRelatedProperties((related as Property[]) || []);
       setLoading(false);
-
-      // Cargar puntos de interés reales
-      fetchNearbyPlaces(prop.neighborhood, prop.city, prop.department);
     };
 
     fetchProperty();
-  }, [id]);
-
-  const fetchNearbyPlaces = async (neighborhood: string, city: string, department: string) => {
-    setNearbyLoading(true);
-    setNearbyError(false);
-    try {
-      const res = await fetch('https://qyedksvaanepyupemsxb.supabase.co/functions/v1/nearby-places', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ neighborhood, city, department }),
-      });
-      const data = await res.json();
-      console.log('[nearby-places] Response status:', res.status, 'data:', JSON.stringify(data));
-      if (!res.ok) {
-        console.error('[nearby-places] Error response:', data);
-        setNearbyError(true);
-        return;
-      }
-      if (data.places && data.places.length > 0) {
-        setNearbyPlaces(data.places);
-      } else {
-        console.warn('[nearby-places] No places returned. Full response:', data);
-        setNearbyError(true);
-      }
-    } catch (e) {
-      console.error('[nearby-places] Fetch exception:', e);
-      setNearbyError(true);
-    } finally {
-      setNearbyLoading(false);
-    }
-  };
+  }, [slug]);
 
   const handleShare = (platform: string) => {
     if (!property) return;
-    const url = window.location.href;
+    const url = `${window.location.origin}/${normalizeOperation(property.operation)}/${property.slug || slug}`;
     const text = `${property.title} - ${property.operation} en ${property.city}`;
     switch (platform) {
       case 'facebook':
@@ -136,7 +99,6 @@ export default function PropertyDetail() {
     window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`, '_blank');
   };
 
-  // Loading skeleton
   if (loading) {
     return (
       <div className="min-h-screen bg-white">
@@ -165,7 +127,111 @@ export default function PropertyDetail() {
     );
   }
 
-  // Not found
+  // Generar datos estructurados JSON-LD para SEO
+  const generateStructuredData = () => {
+    if (!property) return null;
+
+    const propertyUrl = `${window.location.origin}/${normalizeOperation(property.operation)}/${property.slug || slug}`;
+    const mainImage = property.images && property.images.length > 0 
+      ? property.images[0] 
+      : 'https://readdy.ai/api/search-image?query=modern%20real%20estate%20property%20interior%20elegant%20living%20room%20neutral%20tones%20natural%20light%20spacious%20comfortable&width=1200&height=800&seq=detail-placeholder&orientation=landscape';
+
+    // Determinar el tipo de oferta según la operación
+    const offerType = property.operation.toLowerCase().includes('venta') 
+      ? 'https://schema.org/SaleEvent' 
+      : 'https://schema.org/RentAction';
+
+    // Generar descripción si no existe
+    const description = property.description || 
+      `${property.title} en ${property.operation.toLowerCase()} ubicado en ${property.neighborhood}, ${property.city}. ${property.area_built > 0 ? `Esta propiedad de ${property.area_built}m² construidos` : 'Este inmueble'} ${property.bedrooms > 0 ? `cuenta con ${property.bedrooms} habitaciones y ${property.bathrooms} baños.` : ''}`;
+
+    const structuredData = {
+      '@context': 'https://schema.org',
+      '@type': 'Residence',
+      name: property.title,
+      description: description.substring(0, 300),
+      url: propertyUrl,
+      image: property.images && property.images.length > 0 ? property.images : [mainImage],
+      address: {
+        '@type': 'PostalAddress',
+        streetAddress: property.neighborhood || '',
+        addressLocality: property.city,
+        addressRegion: property.department,
+        addressCountry: 'CO'
+      },
+      geo: property.latitude && property.longitude ? {
+        '@type': 'GeoCoordinates',
+        latitude: property.latitude,
+        longitude: property.longitude
+      } : undefined,
+      numberOfRooms: property.bedrooms || undefined,
+      numberOfBedrooms: property.bedrooms || undefined,
+      numberOfBathroomsTotal: property.bathrooms || undefined,
+      floorSize: property.area_built > 0 ? {
+        '@type': 'QuantitativeValue',
+        value: property.area_built,
+        unitCode: 'MTK'
+      } : undefined,
+      offers: {
+        '@type': 'Offer',
+        price: property.price,
+        priceCurrency: property.currency || 'COP',
+        availability: 'https://schema.org/InStock',
+        url: propertyUrl,
+        priceValidUntil: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        seller: agent ? {
+          '@type': 'Person',
+          name: `${agent.first_name} ${agent.last_name}`,
+          telephone: agent.phone || undefined
+        } : undefined
+      },
+      amenityFeature: [
+        ...(property.features_internal || []).map(feat => ({
+          '@type': 'LocationFeatureSpecification',
+          name: feat.replace(/-/g, ' '),
+          value: true
+        })),
+        ...(property.features_external || []).map(feat => ({
+          '@type': 'LocationFeatureSpecification',
+          name: feat.replace(/-/g, ' '),
+          value: true
+        }))
+      ].filter(Boolean),
+      additionalProperty: [
+        property.parking > 0 ? {
+          '@type': 'PropertyValue',
+          name: 'Parqueaderos',
+          value: property.parking
+        } : null,
+        property.area_private > 0 ? {
+          '@type': 'PropertyValue',
+          name: 'Área Privada',
+          value: property.area_private,
+          unitCode: 'MTK'
+        } : null,
+        {
+          '@type': 'PropertyValue',
+          name: 'Tipo de Propiedad',
+          value: property.type
+        },
+        {
+          '@type': 'PropertyValue',
+          name: 'Tipo de Operación',
+          value: property.operation
+        }
+      ].filter(Boolean)
+    };
+
+    // Limpiar propiedades undefined
+    Object.keys(structuredData).forEach(key => {
+      if (structuredData[key as keyof typeof structuredData] === undefined) {
+        delete structuredData[key as keyof typeof structuredData];
+      }
+    });
+
+    return structuredData;
+  };
+
   if (!property) {
     return (
       <div className="min-h-screen bg-white">
@@ -198,7 +264,6 @@ export default function PropertyDetail() {
     : 'Agente Inmobiliario';
 
   const agentPhoneDisplay = agent?.phone || '+57 300 123 4567';
-
   const agentPhotoUrl = agent?.photo_url || null;
 
   const priceLabel = property.operation.includes('Renta Corta')
@@ -207,12 +272,43 @@ export default function PropertyDetail() {
     ? 'por mes'
     : 'COP';
 
+  const currentImageUrl = galleryImages[currentImageIndex];
+  const currentImageVersions = getImageVersions(currentImageUrl);
+
+  const propertyUrl = `${window.location.origin}/${normalizeOperation(property.operation)}/${property.slug || slug}`;
+
+  const metaDescription = property.description 
+    ? property.description.substring(0, 160)
+    : `${property.title} en ${property.operation.toLowerCase()} ubicado en ${property.neighborhood}, ${property.city}. ${property.bedrooms > 0 ? `${property.bedrooms} habitaciones, ${property.bathrooms} baños.` : ''} ${property.area_built > 0 ? `${property.area_built}m² construidos.` : ''}`;
+
+  const mainImageUrl = galleryImages[0];
+
+  const structuredData = generateStructuredData();
+
   return (
     <div className="min-h-screen bg-white">
+      <title>{property.title} - {property.operation} en {property.city}</title>
+      <meta name="description" content={metaDescription} />
+      <meta name="keywords" content={`${property.operation}, ${property.type}, ${property.city}, ${property.neighborhood}, ${property.department}, inmuebles, propiedades`} />
+      <link rel="canonical" href={propertyUrl} />
+      <meta property="og:type" content="website" />
+      <meta property="og:url" content={propertyUrl} />
+      <meta property="og:title" content={`${property.title} - ${property.operation}`} />
+      <meta property="og:description" content={metaDescription} />
+      <meta property="og:image" content={mainImageUrl} />
+      <meta property="og:locale" content="es_CO" />
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta name="twitter:url" content={propertyUrl} />
+      <meta name="twitter:title" content={`${property.title} - ${property.operation}`} />
+      <meta name="twitter:description" content={metaDescription} />
+      <meta name="twitter:image" content={mainImageUrl} />
+      <script type="application/ld+json">{JSON.stringify(structuredData)}</script>
+
       <Navbar />
 
       <section className="pt-24 pb-16">
         <div className="max-w-7xl mx-auto px-6 lg:px-8">
+
           {/* Breadcrumbs */}
           <nav className="mb-6">
             <ol className="flex items-center space-x-2 text-sm text-gray-600">
@@ -259,24 +355,33 @@ export default function PropertyDetail() {
             {/* Main Content */}
             <div className="lg:col-span-2">
 
-              {/* ── CARRUSEL ── */}
+              {/* Carrusel */}
               <div className="relative mb-8 rounded-2xl overflow-hidden bg-gray-900">
-                {/* Imagen principal: object-contain para no recortar nada */}
                 <div className="relative w-full flex items-center justify-center" style={{ minHeight: '340px', maxHeight: '600px' }}>
-                  <img
-                    key={currentImageIndex}
-                    src={galleryImages[currentImageIndex]}
-                    alt={`${property.title} - Imagen ${currentImageIndex + 1}`}
-                    className="max-w-full max-h-[600px] w-auto h-auto object-contain"
-                    style={{ display: 'block', margin: '0 auto' }}
-                  />
+                  {currentImageVersions ? (
+                    <ResponsiveImage
+                      thumbnail={currentImageVersions.thumbnail}
+                      medium={currentImageVersions.medium}
+                      large={currentImageVersions.large}
+                      placeholder={currentImageVersions.placeholder}
+                      alt={`${property.title} - Imagen ${currentImageIndex + 1}`}
+                      className="max-w-full max-h-[600px] w-auto h-auto"
+                      sizes="(max-width: 1024px) 100vw, 66vw"
+                      priority={currentImageIndex === 0}
+                    />
+                  ) : (
+                    <SimpleResponsiveImage
+                      src={currentImageUrl}
+                      alt={`${property.title} - Imagen ${currentImageIndex + 1}`}
+                      className="max-w-full max-h-[600px] w-auto h-auto"
+                      priority={currentImageIndex === 0}
+                    />
+                  )}
 
-                  {/* Contador */}
                   <div className="absolute bottom-4 right-4 bg-black/70 text-white px-4 py-2 rounded-full text-sm font-medium z-10">
                     {currentImageIndex + 1} / {galleryImages.length}
                   </div>
 
-                  {/* Flechas */}
                   {galleryImages.length > 1 && (
                     <>
                       <button
@@ -294,7 +399,6 @@ export default function PropertyDetail() {
                     </>
                   )}
 
-                  {/* Acciones flotantes */}
                   <div className="absolute top-4 right-4 flex gap-2 z-10">
                     <button
                       onClick={() => setIsFavorite(!isFavorite)}
@@ -331,18 +435,22 @@ export default function PropertyDetail() {
                   </div>
                 </div>
 
-                {/* Miniaturas */}
                 {galleryImages.length > 1 && (
                   <div className="flex gap-2 p-3 bg-gray-800 overflow-x-auto">
-                    {galleryImages.map((img, index) => (
-                      <button
-                        key={index}
-                        onClick={() => setCurrentImageIndex(index)}
-                        className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${currentImageIndex === index ? 'border-[#d4816f]' : 'border-transparent opacity-60 hover:opacity-100'}`}
-                      >
-                        <img src={img} alt={`Miniatura ${index + 1}`} className="w-full h-full object-cover" />
-                      </button>
-                    ))}
+                    {galleryImages.map((img, index) => {
+                      const thumbVersions = getImageVersions(img);
+                      const thumbUrl = thumbVersions ? thumbVersions.thumbnail : img;
+                      
+                      return (
+                        <button
+                          key={index}
+                          onClick={() => setCurrentImageIndex(index)}
+                          className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${currentImageIndex === index ? 'border-[#d4816f]' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                        >
+                          <img src={thumbUrl} alt={`Miniatura ${index + 1}`} className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -428,7 +536,7 @@ export default function PropertyDetail() {
                   ) : (
                     <>
                       <p className="text-gray-700 leading-relaxed mb-4">
-                        {property.title} en {property.operation.toLowerCase()} ubicado en {property.neighborhood}, {property.city}
+                        {property.title} en {property.operation.toLowerCase()} ubicado en {property.neighborhood}, {property.city}.
                         {property.area_built > 0 ? ` Esta propiedad de ${property.area_built}m² construidos` : ' Este inmueble'}
                         {property.bedrooms > 0 ? ` cuenta con ${property.bedrooms} habitaciones y ${property.bathrooms} baños.` : '.'}
                         {property.parking > 0 ? ` Incluye ${property.parking} parqueadero${property.parking > 1 ? 's' : ''}.` : ''}
@@ -493,7 +601,7 @@ export default function PropertyDetail() {
               {/* Location Map */}
               <div className="mb-8">
                 <h2 className="text-2xl font-bold text-gray-900 mb-4">Ubicación</h2>
-                <div className="rounded-2xl overflow-hidden border border-gray-200 mb-4">
+                <div className="rounded-2xl overflow-hidden border border-gray-200">
                   <iframe
                     src={`https://www.google.com/maps/embed/v1/place?key=AIzaSyBFw0Qbyq9zTFTd-tUY6dZWTgaQzuU17R8&q=${encodeURIComponent((property.neighborhood || '') + ', ' + (property.city || '') + ', Colombia')}`}
                     width="100%"
@@ -503,53 +611,6 @@ export default function PropertyDetail() {
                     title={`Mapa de ${property.title}`}
                   ></iframe>
                 </div>
-                <div className="bg-[#f5f1ed] rounded-xl p-6">
-                  <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-                    <i className="ri-map-pin-2-line text-[#d4816f]"></i>
-                    Puntos de Interés Cercanos
-                    {!nearbyLoading && nearbyPlaces.length > 0 && (
-                      <span className="ml-auto text-xs font-normal text-gray-500 flex items-center gap-1">
-                        <i className="ri-google-fill text-[#4285F4]"></i> Google Maps
-                      </span>
-                    )}
-                  </h3>
-
-                  {nearbyLoading && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {[1, 2, 3, 4].map((i) => (
-                        <div key={i} className="flex items-center gap-3 animate-pulse">
-                          <div className="w-10 h-10 bg-gray-300 rounded-lg flex-shrink-0"></div>
-                          <div className="flex-1 space-y-2">
-                            <div className="h-3 bg-gray-300 rounded w-3/4"></div>
-                            <div className="h-2 bg-gray-200 rounded w-1/3"></div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {!nearbyLoading && nearbyError && (
-                    <p className="text-sm text-gray-500 text-center py-2">
-                      No se pudieron cargar los puntos de interés para esta zona.
-                    </p>
-                  )}
-
-                  {!nearbyLoading && !nearbyError && nearbyPlaces.length > 0 && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {nearbyPlaces.map((place, index) => (
-                        <div key={index} className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm">
-                            <i className={`${place.icon} text-[#d4816f] text-xl`}></i>
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">{place.name}</p>
-                            <p className="text-xs text-gray-500">{place.type} &bull; {place.distance}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
               </div>
 
               {/* Related Properties */}
@@ -557,28 +618,49 @@ export default function PropertyDetail() {
                 <div>
                   <h2 className="text-2xl font-bold text-gray-900 mb-6">Inmuebles Similares</h2>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {relatedProperties.map((rp) => (
-                      <Link
-                        key={rp.id}
-                        to={`/inmuebles/${rp.id}`}
-                        className="bg-white rounded-2xl overflow-hidden shadow-md hover:shadow-lg transition-shadow duration-300 cursor-pointer block"
-                      >
-                        <div className="relative w-full h-40 bg-gray-100">
-                          {rp.images && rp.images.length > 0 ? (
-                            <img src={rp.images[0]} alt={rp.title} className="w-full h-full object-cover object-top" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                              <i className="ri-image-line text-gray-300 text-3xl"></i>
-                            </div>
-                          )}
-                        </div>
-                        <div className="p-4">
-                          <h4 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2">{rp.title}</h4>
-                          <p className="text-xs text-gray-500 mb-2">{rp.neighborhood}, {rp.city}</p>
-                          <p className="text-lg font-bold text-gray-900">{formatPriceSupabase(rp.price, rp.currency)}</p>
-                        </div>
-                      </Link>
-                    ))}
+                    {relatedProperties.map((rp) => {
+                      const rpImageUrl = rp.images && rp.images.length > 0 ? rp.images[0] : null;
+                      const rpImageVersions = rpImageUrl ? getImageVersions(rpImageUrl) : null;
+                      const rpSlug = rp.slug || rp.id;
+                      const rpOperation = normalizeOperation(rp.operation);
+                      
+                      return (
+                        <Link
+                          key={rp.id}
+                          to={`/${rpOperation}/${rpSlug}`}
+                          className="bg-white rounded-2xl overflow-hidden shadow-md hover:shadow-lg transition-shadow duration-300 cursor-pointer block"
+                        >
+                          <div className="relative w-full h-40 bg-gray-100">
+                            {rpImageVersions ? (
+                              <ResponsiveImage
+                                thumbnail={rpImageVersions.thumbnail}
+                                medium={rpImageVersions.medium}
+                                large={rpImageVersions.large}
+                                placeholder={rpImageVersions.placeholder}
+                                alt={rp.title}
+                                className="w-full h-40"
+                                sizes="(max-width: 768px) 100vw, 300px"
+                              />
+                            ) : rpImageUrl ? (
+                              <SimpleResponsiveImage
+                                src={rpImageUrl}
+                                alt={rp.title}
+                                className="w-full h-40"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <i className="ri-image-line text-gray-300 text-3xl"></i>
+                              </div>
+                            )}
+                          </div>
+                          <div className="p-4">
+                            <h4 className="text-sm font-bold text-gray-900 mb-1 line-clamp-2">{rp.title}</h4>
+                            <p className="text-xs text-gray-500 mb-2">{rp.neighborhood}, {rp.city}</p>
+                            <p className="text-lg font-bold text-gray-900">{formatPriceSupabase(rp.price, rp.currency)}</p>
+                          </div>
+                        </Link>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -588,7 +670,7 @@ export default function PropertyDetail() {
             <div className="lg:col-span-1">
               <div className="sticky top-24 space-y-6">
 
-                {/* ── TARJETA AGENTE ── */}
+                {/* Tarjeta Agente */}
                 <div className="bg-white border-2 border-gray-200 rounded-2xl p-6">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 text-center">Agente a cargo</p>
                   <div className="text-center mb-6">

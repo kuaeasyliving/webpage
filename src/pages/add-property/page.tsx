@@ -17,6 +17,11 @@ import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../../lib/supabase';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAgents } from '../../hooks/useAgents';
+import { useImageOptimization } from '../../hooks/useImageOptimization';
+import ImageOptimizationProgress from '../../components/base/ImageOptimizationProgress';
+import ImageOptimizationToast from '../../components/base/ImageOptimizationToast';
+import { OptimizedImage } from '../../utils/imageOptimizer';
+import { generatePropertySlug, generateUniqueSlug, isValidSlug, PropertySlugData } from '../../utils/slugGenerator';
 
 interface FormData {
   title: string;
@@ -56,9 +61,11 @@ interface SortableImageProps {
   isCover: boolean;
   onSetCover: (index: number) => void;
   onRemove: (index: number) => void;
+  isOptimizing?: boolean;
+  optimizationProgress?: number;
 }
 
-function SortableImage({ id, preview, index, isCover, onSetCover, onRemove }: SortableImageProps) {
+function SortableImage({ id, preview, index, isCover, onSetCover, onRemove, isOptimizing, optimizationProgress }: SortableImageProps) {
   const {
     attributes,
     listeners,
@@ -83,14 +90,16 @@ function SortableImage({ id, preview, index, isCover, onSetCover, onRemove }: So
       } ${isDragging ? 'shadow-2xl' : ''}`}
     >
       {/* Drag handle */}
-      <div
-        {...attributes}
-        {...listeners}
-        className="absolute top-2 right-2 z-10 w-8 h-8 bg-black/60 text-white rounded-lg flex items-center justify-center cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
-        title="Arrastrar para reordenar"
-      >
-        <i className="ri-drag-move-2-line text-sm"></i>
-      </div>
+      {!isOptimizing && (
+        <div
+          {...attributes}
+          {...listeners}
+          className="absolute top-2 right-2 z-10 w-8 h-8 bg-black/60 text-white rounded-lg flex items-center justify-center cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
+          title="Arrastrar para reordenar"
+        >
+          <i className="ri-drag-move-2-line text-sm"></i>
+        </div>
+      )}
 
       <div className="w-full h-40">
         <img
@@ -101,29 +110,42 @@ function SortableImage({ id, preview, index, isCover, onSetCover, onRemove }: So
         />
       </div>
 
+      {/* Optimization overlay */}
+      {isOptimizing && (
+        <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2">
+          <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-white text-xs font-semibold">Optimizando...</p>
+          {optimizationProgress !== undefined && (
+            <p className="text-white text-xs">{optimizationProgress}%</p>
+          )}
+        </div>
+      )}
+
       {/* Overlay actions */}
-      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-        <button
-          type="button"
-          onClick={() => onSetCover(index)}
-          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
-            isCover
-              ? 'bg-yellow-500 text-white'
-              : 'bg-white text-slate-700 hover:bg-yellow-500 hover:text-white'
-          }`}
-          title="Marcar como portada"
-        >
-          <i className="ri-star-fill"></i>
-        </button>
-        <button
-          type="button"
-          onClick={() => onRemove(index)}
-          className="w-10 h-10 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all flex items-center justify-center"
-          title="Eliminar"
-        >
-          <i className="ri-delete-bin-line"></i>
-        </button>
-      </div>
+      {!isOptimizing && (
+        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => onSetCover(index)}
+            className={`w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
+              isCover
+                ? 'bg-yellow-500 text-white'
+                : 'bg-white text-slate-700 hover:bg-yellow-500 hover:text-white'
+            }`}
+            title="Marcar como portada"
+          >
+            <i className="ri-star-fill"></i>
+          </button>
+          <button
+            type="button"
+            onClick={() => onRemove(index)}
+            className="w-10 h-10 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all flex items-center justify-center"
+            title="Eliminar"
+          >
+            <i className="ri-delete-bin-line"></i>
+          </button>
+        </div>
+      )}
 
       {/* Cover badge */}
       {isCover && (
@@ -134,7 +156,7 @@ function SortableImage({ id, preview, index, isCover, onSetCover, onRemove }: So
       )}
 
       {/* Index badge */}
-      {!isCover && (
+      {!isCover && !isOptimizing && (
         <div className="absolute bottom-2 left-2 bg-black/60 text-white px-2 py-1 rounded-lg text-xs font-medium">
           {index + 1}
         </div>
@@ -151,6 +173,12 @@ export default function AddPropertyPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const totalSteps = 6;
+
+  // Estado para el slug generado
+  const [generatedSlug, setGeneratedSlug] = useState<string>('');
+  const [isSlugValid, setIsSlugValid] = useState<boolean>(true);
+  const [slugError, setSlugError] = useState<string>('');
+
   const [formData, setFormData] = useState<FormData>({
     title: '',
     operationType: '',
@@ -188,6 +216,16 @@ export default function AddPropertyPage() {
   const [existingImageUrls, setExistingImageUrls] = useState<string[]>([]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  // Estados para optimización de imágenes
+  const [optimizedImages, setOptimizedImages] = useState<OptimizedImage[]>([]);
+  const [optimizingImages, setOptimizingImages] = useState<Set<number>>(new Set());
+  const [optimizationProgress, setOptimizationProgress] = useState<Map<number, number>>(new Map());
+  const [showOptimizationProgress, setShowOptimizationProgress] = useState(false);
+  const [currentOptimizingIndex, setCurrentOptimizingIndex] = useState<number>(-1);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; message: string } | null>(null);
+
+  const { optimizeAndUpload } = useImageOptimization();
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -332,36 +370,65 @@ export default function AddPropertyPage() {
     const uploadedUrls: string[] = [];
     uploadedUrls.push(...existingImageUrls);
 
-    for (const file of formData.images) {
+    // Subir imágenes optimizadas
+    for (let i = 0; i < optimizedImages.length; i++) {
+      const optimized = optimizedImages[i];
       try {
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-        const filePath = `properties/${fileName}`;
+        setCurrentOptimizingIndex(i);
+        setShowOptimizationProgress(true);
 
-        const { error: uploadError } = await supabase.storage
-          .from('property-images')
-          .upload(filePath, file);
+        const urls = await optimizeAndUpload(
+          optimized,
+          undefined,
+          (progress) => {
+            setOptimizationProgress(prev => new Map(prev).set(i, progress.progress));
+          }
+        );
 
-        if (uploadError) throw uploadError;
-
-        const { data: { publicUrl } } = supabase.storage
-          .from('property-images')
-          .getPublicUrl(filePath);
-
-        uploadedUrls.push(publicUrl);
+        // Usar la versión large como imagen principal
+        uploadedUrls.push(urls.large);
       } catch (error) {
-        console.error('Error subiendo imagen:', error);
+        console.error('Error subiendo imagen optimizada:', error);
+        setToastMessage({
+          type: 'error',
+          message: `Error al subir imagen ${i + 1}`
+        });
       }
     }
 
+    setShowOptimizationProgress(false);
+    setCurrentOptimizingIndex(-1);
     return uploadedUrls;
   };
 
   const handleSubmit = async () => {
     if (!validateStep(currentStep)) return;
+    
+    // Validar que el slug sea válido
+    if (!generatedSlug || !isSlugValid) {
+      setToastMessage({
+        type: 'error',
+        message: 'No se pudo generar un slug válido. Verifica los datos del inmueble.'
+      });
+      return;
+    }
+
     setIsSaving(true);
 
     try {
+      // Validar unicidad del slug
+      const isUnique = await validateSlugUniqueness(generatedSlug);
+      let finalSlug = generatedSlug;
+
+      if (!isUnique) {
+        // Generar slug único agregando sufijo numérico
+        finalSlug = await ensureUniqueSlug(generatedSlug);
+        setToastMessage({
+          type: 'info',
+          message: `El slug fue ajustado a: ${finalSlug}`
+        });
+      }
+
       const imageUrls = await uploadImages();
 
       const statusMap: Record<string, string> = {
@@ -392,6 +459,7 @@ export default function AddPropertyPage() {
         features_external: formData.externalAmenities,
         description: formData.description.trim() || null,
         agent: formData.assignedAgent,
+        slug: finalSlug, // Agregar el slug generado
         updated_at: new Date().toISOString(),
       };
 
@@ -409,8 +477,16 @@ export default function AddPropertyPage() {
       }
 
       setShowSuccessModal(true);
+      setToastMessage({
+        type: 'success',
+        message: editId ? 'Propiedad actualizada exitosamente' : 'Propiedad guardada exitosamente'
+      });
     } catch (error) {
       console.error('Error guardando propiedad:', error);
+      setToastMessage({
+        type: 'error',
+        message: 'Error al guardar la propiedad. Intenta nuevamente.'
+      });
     } finally {
       setIsSaving(false);
     }
@@ -482,20 +558,59 @@ export default function AddPropertyPage() {
     if (e.target.files) handleFiles(e.target.files);
   };
 
-  const handleFiles = (files: FileList) => {
+  const handleFiles = async (files: FileList) => {
     const fileArray = Array.from(files);
-    
-    // Agregar nuevos archivos al array de imágenes
-    setFormData((prev) => ({ ...prev, images: [...prev.images, ...fileArray] }));
-    
-    // Generar previews para los nuevos archivos
-    fileArray.forEach((file) => {
+    const startIndex = imagePreviews.length;
+
+    // Mostrar previews inmediatamente
+    fileArray.forEach((file, idx) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         setImagePreviews((prev) => [...prev, reader.result as string]);
       };
       reader.readAsDataURL(file);
+
+      // Marcar como optimizando
+      setOptimizingImages(prev => new Set(prev).add(startIndex + idx));
     });
+
+    // Optimizar imágenes en segundo plano
+    const { optimizeImage } = await import('../../utils/imageOptimizer');
+    
+    for (let i = 0; i < fileArray.length; i++) {
+      const file = fileArray[i];
+      const imageIndex = startIndex + i;
+
+      try {
+        const optimized = await optimizeImage(file, (progress) => {
+          setOptimizationProgress(prev => new Map(prev).set(imageIndex, progress.progress));
+        });
+
+        setOptimizedImages(prev => [...prev, optimized]);
+        
+        setToastMessage({
+          type: 'success',
+          message: `Imagen ${i + 1} optimizada correctamente`
+        });
+      } catch (error) {
+        console.error('Error optimizando imagen:', error);
+        setToastMessage({
+          type: 'error',
+          message: `Error al optimizar imagen ${i + 1}`
+        });
+      } finally {
+        setOptimizingImages(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(imageIndex);
+          return newSet;
+        });
+        setOptimizationProgress(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(imageIndex);
+          return newMap;
+        });
+      }
+    }
   };
 
   const removeImage = (index: number) => {
@@ -505,12 +620,9 @@ export default function AddPropertyPage() {
       // Es una imagen existente
       setExistingImageUrls((prev) => prev.filter((_, i) => i !== index));
     } else {
-      // Es una imagen nueva
-      const newImageIndex = index - existingCount;
-      setFormData((prev) => ({
-        ...prev,
-        images: prev.images.filter((_, i) => i !== newImageIndex),
-      }));
+      // Es una imagen nueva optimizada
+      const optimizedIndex = index - existingCount;
+      setOptimizedImages((prev) => prev.filter((_, i) => i !== optimizedIndex));
     }
     
     // Remover del array de previews
@@ -552,15 +664,12 @@ export default function AddPropertyPage() {
       setExistingImageUrls(newExisting);
     } else if (!oldIsExisting && !newIsExisting) {
       // Ambas son imágenes nuevas
-      const oldFileIndex = oldIndex - existingCount;
-      const newFileIndex = newIndex - existingCount;
-      setFormData((prev) => ({
-        ...prev,
-        images: arrayMove(prev.images, oldFileIndex, newFileIndex),
-      }));
+      const oldOptimizedIndex = oldIndex - existingCount;
+      const newOptimizedIndex = newIndex - existingCount;
+      setOptimizedImages((prev) => arrayMove(prev, oldOptimizedIndex, newOptimizedIndex));
     } else {
       // Mezcla entre existentes y nuevas - reorganizar todo
-      const allImages: Array<{ type: 'existing' | 'new'; data: string | File; originalIndex: number }> = [];
+      const allImages: Array<{ type: 'existing' | 'new'; data: string | OptimizedImage; originalIndex: number }> = [];
       
       // Mapear imágenes existentes
       existingImageUrls.forEach((url, i) => {
@@ -568,8 +677,8 @@ export default function AddPropertyPage() {
       });
       
       // Mapear imágenes nuevas
-      formData.images.forEach((file, i) => {
-        allImages.push({ type: 'new', data: file, originalIndex: i });
+      optimizedImages.forEach((optimized, i) => {
+        allImages.push({ type: 'new', data: optimized, originalIndex: i });
       });
       
       // Reordenar según el movimiento
@@ -577,18 +686,18 @@ export default function AddPropertyPage() {
       
       // Separar de nuevo en existentes y nuevas
       const newExistingUrls: string[] = [];
-      const newFiles: File[] = [];
+      const newOptimized: OptimizedImage[] = [];
       
       reordered.forEach((item) => {
         if (item.type === 'existing') {
           newExistingUrls.push(item.data as string);
         } else {
-          newFiles.push(item.data as File);
+          newOptimized.push(item.data as OptimizedImage);
         }
       });
       
       setExistingImageUrls(newExistingUrls);
-      setFormData((prev) => ({ ...prev, images: newFiles }));
+      setOptimizedImages(newOptimized);
     }
 
     // Actualizar índice de portada
@@ -616,6 +725,80 @@ export default function AddPropertyPage() {
     return titles[step] || '';
   };
 
+  // Generar slug automáticamente cuando cambien los datos relevantes
+  useEffect(() => {
+    if (formData.operationType && formData.propertyType && formData.city) {
+      const slugData: PropertySlugData = {
+        operation: formData.operationType,
+        type: formData.propertyType,
+        neighborhood: formData.neighborhood,
+        city: formData.city,
+        bedrooms: formData.bedrooms,
+        title: formData.title,
+      };
+      
+      const newSlug = generatePropertySlug(slugData);
+      setGeneratedSlug(newSlug);
+      setIsSlugValid(isValidSlug(newSlug));
+      
+      if (!isValidSlug(newSlug)) {
+        setSlugError('El slug generado no es válido. Verifica los datos ingresados.');
+      } else {
+        setSlugError('');
+      }
+    }
+  }, [
+    formData.operationType,
+    formData.propertyType,
+    formData.city,
+    formData.neighborhood,
+    formData.bedrooms,
+    formData.title,
+  ]);
+
+  // Validar unicidad del slug antes de guardar
+  const validateSlugUniqueness = async (slug: string): Promise<boolean> => {
+    try {
+      const { data, error } = await supabase
+        .from('properties')
+        .select('id, slug')
+        .eq('slug', slug)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error validando slug:', error);
+        return false;
+      }
+
+      // Si estamos editando, permitir el mismo slug si es de la misma propiedad
+      if (editId && data && data.id === editId) {
+        return true;
+      }
+
+      // Si existe otro inmueble con el mismo slug, no es válido
+      return !data;
+    } catch (error) {
+      console.error('Error validando slug:', error);
+      return false;
+    }
+  };
+
+  // Generar slug único si ya existe
+  const ensureUniqueSlug = async (baseSlug: string): Promise<string> => {
+    const { data, error } = await supabase
+      .from('properties')
+      .select('slug')
+      .like('slug', `${baseSlug}%`);
+
+    if (error) {
+      console.error('Error obteniendo slugs existentes:', error);
+      return baseSlug;
+    }
+
+    const existingSlugs = data?.map((p) => p.slug) || [];
+    return generateUniqueSlug(baseSlug, existingSlugs);
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 flex items-center justify-center">
@@ -629,6 +812,25 @@ export default function AddPropertyPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+      {/* Toast notifications */}
+      {toastMessage && (
+        <ImageOptimizationToast
+          type={toastMessage.type}
+          message={toastMessage.message}
+          onClose={() => setToastMessage(null)}
+        />
+      )}
+
+      {/* Optimization progress modal */}
+      {showOptimizationProgress && currentOptimizingIndex >= 0 && (
+        <ImageOptimizationProgress
+          currentImage={currentOptimizingIndex + 1}
+          totalImages={optimizedImages.length}
+          progress={optimizationProgress.get(currentOptimizingIndex) || 0}
+          stage="compressing"
+        />
+      )}
+
       <div className="max-w-5xl mx-auto px-4 py-12">
         {/* Header */}
         <div className="text-center mb-12">
@@ -832,6 +1034,90 @@ export default function AddPropertyPage() {
                 </div>
               </div>
             </div>
+
+            {/* Preview del Slug SEO */}
+            {generatedSlug && (
+              <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-8 hover:shadow-lg transition-shadow">
+                <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-100">
+                  <div className="w-14 h-14 bg-gradient-to-br from-purple-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+                    <i className="ri-links-line text-white text-2xl"></i>
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-900">URL Optimizada para SEO</h2>
+                    <p className="text-sm text-slate-500 mt-1">Vista previa de la URL que tendrá este inmueble</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-2">
+                      <i className="ri-link text-purple-600 mr-1"></i>
+                      URL Generada Automáticamente
+                    </label>
+                    <div className={`w-full px-4 py-3.5 text-sm border-2 rounded-xl ${
+                      isSlugValid 
+                        ? 'border-green-300 bg-green-50' 
+                        : 'border-red-300 bg-red-50'
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        {isSlugValid ? (
+                          <i className="ri-checkbox-circle-fill text-green-600 text-lg"></i>
+                        ) : (
+                          <i className="ri-error-warning-fill text-red-600 text-lg"></i>
+                        )}
+                        <span className="font-mono text-slate-700">
+                          /{formData.operationType || 'operacion'}/{generatedSlug}
+                        </span>
+                      </div>
+                    </div>
+                    {slugError && (
+                      <p className="text-xs text-red-600 mt-2 flex items-center gap-1">
+                        <i className="ri-error-warning-line"></i>
+                        {slugError}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-start gap-3">
+                    <i className="ri-information-line text-purple-600 text-xl mt-0.5"></i>
+                    <div>
+                      <p className="text-sm font-semibold text-purple-900 mb-1">¿Qué es esto?</p>
+                      <p className="text-xs text-purple-700 mb-2">
+                        Esta URL se genera automáticamente a partir de los datos del inmueble y está optimizada para aparecer en Google.
+                      </p>
+                      <p className="text-xs text-purple-700">
+                        <strong>Ejemplo:</strong> Si alguien busca "apartamento en venta en Pereira", tu inmueble tendrá más posibilidades de aparecer.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-slate-50 rounded-lg p-4">
+                      <p className="text-xs font-bold text-slate-600 mb-2">
+                        <i className="ri-check-line text-green-600 mr-1"></i>
+                        Beneficios SEO
+                      </p>
+                      <ul className="text-xs text-slate-600 space-y-1">
+                        <li>• Mejor posicionamiento en Google</li>
+                        <li>• URL descriptiva y profesional</li>
+                        <li>• Fácil de compartir en redes sociales</li>
+                      </ul>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg p-4">
+                      <p className="text-xs font-bold text-slate-600 mb-2">
+                        <i className="ri-refresh-line text-blue-600 mr-1"></i>
+                        Actualización Automática
+                      </p>
+                      <ul className="text-xs text-slate-600 space-y-1">
+                        <li>• Se actualiza al cambiar los datos</li>
+                        <li>• Sin caracteres especiales</li>
+                        <li>• Formato optimizado para web</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1040,7 +1326,7 @@ export default function AddPropertyPage() {
           </div>
         )}
 
-        {/* STEP 5 - Multimedia con drag & drop para reordenar */}
+        {/* STEP 5 - Multimedia con optimización automática */}
         {currentStep === 5 && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-md border border-slate-100 p-8 hover:shadow-lg transition-shadow">
@@ -1061,6 +1347,16 @@ export default function AddPropertyPage() {
                     <i className="ri-gallery-line text-teal-600 mr-1"></i>
                     Fotografías del Inmueble
                   </label>
+                  
+                  {/* Info banner sobre optimización */}
+                  <div className="mb-4 bg-teal-50 border border-teal-200 rounded-xl p-4 flex items-start gap-3">
+                    <i className="ri-information-line text-teal-600 text-xl mt-0.5"></i>
+                    <div>
+                      <p className="text-sm font-semibold text-teal-900 mb-1">Optimización Automática Activada</p>
+                      <p className="text-xs text-teal-700">Las imágenes se optimizarán automáticamente al subirlas. Soportamos JPG, PNG, WebP, HEIC y HEIF. Tamaño máximo: 10MB por imagen.</p>
+                    </div>
+                  </div>
+
                   <div
                     onDragEnter={handleDrag}
                     onDragLeave={handleDrag}
@@ -1071,7 +1367,7 @@ export default function AddPropertyPage() {
                     <input
                       type="file"
                       multiple
-                      accept="image/*"
+                      accept="image/*,.heic,.heif"
                       onChange={handleFileInput}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     />
@@ -1081,7 +1377,7 @@ export default function AddPropertyPage() {
                       </div>
                       <h3 className="text-lg font-bold text-slate-800 mb-2">Arrastra y suelta tus imágenes aquí</h3>
                       <p className="text-sm text-slate-500 mb-4">o haz clic para seleccionar archivos</p>
-                      <p className="text-xs text-slate-400">Formatos: JPG, PNG, WEBP (Máx. 10MB por imagen)</p>
+                      <p className="text-xs text-slate-400">Formatos: JPG, PNG, WEBP, HEIC, HEIF (Máx. 10MB por imagen)</p>
                     </div>
                   </div>
 
@@ -1117,6 +1413,8 @@ export default function AddPropertyPage() {
                                 isCover={formData.coverImageIndex === index}
                                 onSetCover={setCoverImage}
                                 onRemove={removeImage}
+                                isOptimizing={optimizingImages.has(index)}
+                                optimizationProgress={optimizationProgress.get(index)}
                               />
                             ))}
                           </div>
@@ -1254,15 +1552,15 @@ export default function AddPropertyPage() {
           ) : <div></div>}
 
           {currentStep < totalSteps ? (
-            <button type="button" onClick={handleNext} disabled={isSaving} className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-300 whitespace-nowrap disabled:opacity-50 cursor-pointer">
+            <button type="button" onClick={handleNext} disabled={isSaving || !isSlugValid} className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-300 whitespace-nowrap disabled:opacity-50 cursor-pointer">
               Siguiente<i className="ri-arrow-right-line"></i>
             </button>
           ) : (
             <div className="flex items-center gap-3">
-              <button type="button" onClick={handleOpenPreview} disabled={isSaving} className="flex items-center gap-2 px-6 py-3 bg-white border-2 border-teal-500 text-teal-600 rounded-xl font-semibold hover:bg-teal-50 transition-all duration-300 whitespace-nowrap disabled:opacity-50 cursor-pointer">
+              <button type="button" onClick={handleOpenPreview} disabled={isSaving || !isSlugValid} className="flex items-center gap-2 px-6 py-3 bg-white border-2 border-teal-500 text-teal-600 rounded-xl font-semibold hover:bg-teal-50 transition-all duration-300 whitespace-nowrap disabled:opacity-50 cursor-pointer">
                 <i className="ri-eye-line text-lg"></i>Vista Previa
               </button>
-              <button type="button" onClick={handleSubmit} disabled={isSaving} className="flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-bold text-base hover:shadow-xl transition-all duration-300 hover:scale-105 whitespace-nowrap disabled:opacity-50 cursor-pointer">
+              <button type="button" onClick={handleSubmit} disabled={isSaving || !isSlugValid} className="flex items-center gap-2 px-8 py-4 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-bold text-base hover:shadow-xl transition-all duration-300 hover:scale-105 whitespace-nowrap disabled:opacity-50 cursor-pointer">
                 {isSaving ? (
                   <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>Guardando...</>
                 ) : (

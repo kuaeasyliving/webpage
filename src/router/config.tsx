@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { RouteObject } from 'react-router-dom';
+import { RouteObject, Navigate } from 'react-router-dom';
 import ProtectedRoute from '../components/auth/ProtectedRoute';
 
 const Home = lazy(() => import('../pages/home/page'));
@@ -16,6 +16,9 @@ const NotFound = lazy(() => import('../pages/NotFound'));
 const TratamientoDatos = lazy(() => import('../pages/tratamiento-datos/page'));
 const PoliticaReembolso = lazy(() => import('../pages/politica-reembolso/page'));
 
+// Componente de redirección para rutas antiguas /inmuebles/:id
+const PropertyRedirect = lazy(() => import('../pages/property-detail/PropertyRedirect'));
+
 const routes: RouteObject[] = [
   {
     path: '/',
@@ -25,8 +28,31 @@ const routes: RouteObject[] = [
     path: '/inmuebles',
     element: <Properties />,
   },
+  // Ruta antigua - Redirección de /inmuebles/:id a la nueva URL con slug
   {
     path: '/inmuebles/:id',
+    element: <PropertyRedirect />,
+  },
+  // Rutas SEO-friendly por operación
+  {
+    path: '/venta/:slug',
+    element: <PropertyDetail />,
+  },
+  {
+    path: '/arriendo/:slug',
+    element: <PropertyDetail />,
+  },
+  {
+    path: '/renta-corta/:slug',
+    element: <PropertyDetail />,
+  },
+  // Rutas alternativas con el valor exacto de la base de datos
+  {
+    path: '/arriendo-tradicional/:slug',
+    element: <PropertyDetail />,
+  },
+  {
+    path: '/arriendo-renta-corta/:slug',
     element: <PropertyDetail />,
   },
   {
