@@ -159,43 +159,45 @@ export const useAgents = () => {
     }
   };
 
-  const uploadAgentPhoto = async (file: File) => {
-    try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-      const filePath = `agents/${fileName}`;
+  const uploadAgentPhoto = async (file: File): Promise<string> => {
+    const fileExt = file.name.split('.').pop() || 'jpg';
+    const fileName = `${Math.random().toString(36).substring(2)}-${Date.now()}.${fileExt}`;
+    const filePath = `agents/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from('properties')
-        .upload(filePath, file);
+    const { error: uploadError } = await supabase.storage
+      .from('agent-photos')
+      .upload(filePath, file, { upsert: true });
 
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('properties')
-        .getPublicUrl(filePath);
-
-      return { success: true, url: publicUrl };
-    } catch (error: any) {
-      console.error('Error uploading photo:', error);
-      return { success: false, error: error.message };
+    if (uploadError) {
+      console.error('[Storage] Error subiendo foto de agente:', uploadError);
+      throw new Error(`No se pudo subir la foto: ${uploadError.message}`);
     }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('agent-photos')
+      .getPublicUrl(filePath);
+
+    return publicUrl;
   };
 
-  const deleteAgentPhoto = async (photoUrl: string) => {
+  const deleteAgentPhoto = async (photoUrl: string): Promise<void> => {
     try {
-      const path = photoUrl.split('/properties/')[1];
-      if (!path) return { success: false, error: 'URL inválida' };
+      // Extraer el path del archivo desde la URL pública
+      const marker = '/agent-photos/';
+      const markerIndex = photoUrl.indexOf(marker);
+      if (markerIndex === -1) return;
+
+      const filePath = photoUrl.substring(markerIndex + marker.length);
 
       const { error } = await supabase.storage
-        .from('properties')
-        .remove([path]);
+        .from('agent-photos')
+        .remove([filePath]);
 
-      if (error) throw error;
-      return { success: true };
-    } catch (error: any) {
-      console.error('Error deleting photo:', error);
-      return { success: false, error: error.message };
+      if (error) {
+        console.warn('[Storage] No se pudo eliminar foto del agente:', error.message);
+      }
+    } catch (err) {
+      console.warn('[Storage] Error en deleteAgentPhoto:', err);
     }
   };
 

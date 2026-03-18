@@ -1,8 +1,14 @@
 /**
  * Utilidades para trabajar con URLs de imágenes optimizadas
- * 
- * Ayuda a extraer las diferentes versiones de imágenes desde las URLs
- * almacenadas en Supabase Storage
+ *
+ * Formato de URL esperado (sistema nuevo):
+ *   {base}-{timestamp}-{random}-thumbnail.webp
+ *   {base}-{timestamp}-{random}-medium.webp
+ *   {base}-{timestamp}-{random}-large.webp
+ *   {base}-{timestamp}-{random}-placeholder.webp
+ *
+ * Las 4 versiones comparten el mismo prefijo, por lo que son
+ * reconstruibles a partir de cualquiera de ellas.
  */
 
 export interface ImageVersions {
@@ -13,47 +19,43 @@ export interface ImageVersions {
 }
 
 /**
- * Detecta si una URL de imagen tiene versiones optimizadas
- * Las imágenes optimizadas tienen sufijos como -thumbnail, -medium, -large, -placeholder
+ * Detecta si una URL pertenece al sistema de imágenes optimizadas
+ * (nuevo formato con nombre base compartido).
  */
 export const hasOptimizedVersions = (imageUrl: string): boolean => {
-  return imageUrl.includes('-thumbnail') || 
-         imageUrl.includes('-medium') || 
-         imageUrl.includes('-large') ||
-         imageUrl.includes('-placeholder');
+  if (!imageUrl) return false;
+  return /-(thumbnail|medium|large|placeholder)\.webp(\?.*)?$/.test(imageUrl);
 };
 
 /**
- * Extrae todas las versiones de una imagen optimizada
- * Si la URL es de una versión específica, genera las URLs de las otras versiones
+ * Extrae la URL base (sin el sufijo de tamaño) para poder
+ * reconstruir las 4 versiones de la imagen.
+ *
+ * Funciona con el nuevo formato:  nombre-ts-rnd-{size}.webp
+ * Para imágenes antiguas sin versiones devuelve null.
  */
 export const getImageVersions = (imageUrl: string): ImageVersions | null => {
   if (!imageUrl) return null;
 
-  // Si la imagen tiene versiones optimizadas
-  if (hasOptimizedVersions(imageUrl)) {
-    // Extraer la base de la URL (sin el sufijo de tamaño)
-    const baseUrl = imageUrl
-      .replace(/-thumbnail-/, '-SIZE-')
-      .replace(/-medium-/, '-SIZE-')
-      .replace(/-large-/, '-SIZE-')
-      .replace(/-placeholder-/, '-SIZE-');
+  // Detectar el sufijo de tamaño al final (antes de .webp y posibles query params)
+  const match = imageUrl.match(/^(.*?)-(thumbnail|medium|large|placeholder)(\.webp)(\?.*)?$/);
+  if (!match) return null;
 
-    return {
-      thumbnail: baseUrl.replace('-SIZE-', '-thumbnail-'),
-      medium: baseUrl.replace('-SIZE-', '-medium-'),
-      large: baseUrl.replace('-SIZE-', '-large-'),
-      placeholder: baseUrl.replace('-SIZE-', '-placeholder-'),
-    };
-  }
+  const baseUrl = match[1];   // todo antes del sufijo de tamaño
+  const ext = match[3];       // .webp
+  const query = match[4] || ''; // query params opcionales
 
-  // Si es una imagen antigua sin optimización, retornar null
-  return null;
+  return {
+    thumbnail: `${baseUrl}-thumbnail${ext}${query}`,
+    medium:    `${baseUrl}-medium${ext}${query}`,
+    large:     `${baseUrl}-large${ext}${query}`,
+    placeholder: `${baseUrl}-placeholder${ext}${query}`,
+  };
 };
 
 /**
- * Obtiene la versión medium de una imagen (la más común para mostrar)
- * Si no tiene versiones optimizadas, retorna la URL original
+ * Versión medium de una imagen (la más usada en páginas de detalle).
+ * Retorna la URL original si no tiene versiones optimizadas.
  */
 export const getMediumVersion = (imageUrl: string): string => {
   const versions = getImageVersions(imageUrl);
@@ -61,8 +63,8 @@ export const getMediumVersion = (imageUrl: string): string => {
 };
 
 /**
- * Obtiene la versión thumbnail de una imagen (para listados)
- * Si no tiene versiones optimizadas, retorna la URL original
+ * Versión thumbnail de una imagen (listados de propiedades).
+ * Retorna la URL original si no tiene versiones optimizadas.
  */
 export const getThumbnailVersion = (imageUrl: string): string => {
   const versions = getImageVersions(imageUrl);
@@ -70,8 +72,8 @@ export const getThumbnailVersion = (imageUrl: string): string => {
 };
 
 /**
- * Obtiene la versión large de una imagen (para galerías)
- * Si no tiene versiones optimizadas, retorna la URL original
+ * Versión large de una imagen (galerías / vista ampliada).
+ * Retorna la URL original si no tiene versiones optimizadas.
  */
 export const getLargeVersion = (imageUrl: string): string => {
   const versions = getImageVersions(imageUrl);
@@ -79,8 +81,8 @@ export const getLargeVersion = (imageUrl: string): string => {
 };
 
 /**
- * Obtiene el placeholder de una imagen (para blur effect)
- * Si no tiene versiones optimizadas, retorna la URL original
+ * URL del placeholder (blur effect durante la carga).
+ * Retorna la URL original si no tiene versiones optimizadas.
  */
 export const getPlaceholderVersion = (imageUrl: string): string => {
   const versions = getImageVersions(imageUrl);
@@ -88,18 +90,14 @@ export const getPlaceholderVersion = (imageUrl: string): string => {
 };
 
 /**
- * Convierte un array de URLs de imágenes a un array de versiones optimizadas
- * Útil para procesar las imágenes de una propiedad
+ * Convierte un array de URLs a un array con las versiones optimizadas disponibles.
  */
 export const convertToOptimizedImages = (imageUrls: string[]): Array<ImageVersions | string> => {
-  return imageUrls.map(url => {
-    const versions = getImageVersions(url);
-    return versions || url;
-  });
+  return imageUrls.map(url => getImageVersions(url) || url);
 };
 
 /**
- * Verifica si una propiedad tiene imágenes optimizadas
+ * Verifica si una propiedad tiene al menos una imagen con versiones optimizadas.
  */
 export const propertyHasOptimizedImages = (images: string[]): boolean => {
   if (!images || images.length === 0) return false;

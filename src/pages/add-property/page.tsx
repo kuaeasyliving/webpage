@@ -22,6 +22,7 @@ import ImageOptimizationProgress from '../../components/base/ImageOptimizationPr
 import ImageOptimizationToast from '../../components/base/ImageOptimizationToast';
 import { OptimizedImage } from '../../utils/imageOptimizer';
 import { generatePropertySlug, generateUniqueSlug, isValidSlug, PropertySlugData } from '../../utils/slugGenerator';
+import { uploadOptimizedImage } from '../../utils/imageUploader';
 
 interface FormData {
   title: string;
@@ -207,7 +208,7 @@ export default function AddPropertyPage() {
     coverImageIndex: 0,
     videoUrl: '',
     assignedAgent: '',
-    publicationStatus: 'borrador',
+    publicationStatus: 'publicado', // Por defecto siempre "Publicado"
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -352,7 +353,10 @@ export default function AddPropertyPage() {
     }
 
     if (step === 6) {
-      if (!formData.assignedAgent) newErrors.assignedAgent = 'Debes asignar un agente';
+      // Validación obligatoria: debe asignarse al menos un agente
+      if (!formData.assignedAgent) {
+        newErrors.assignedAgent = 'Debes seleccionar un agente para poder guardar la propiedad';
+      }
     }
 
     setErrors(newErrors);
@@ -370,45 +374,86 @@ export default function AddPropertyPage() {
     const uploadedUrls: string[] = [];
     uploadedUrls.push(...existingImageUrls);
 
-    // Subir imágenes optimizadas
-    for (let i = 0; i < optimizedImages.length; i++) {
-      const optimized = optimizedImages[i];
-      try {
-        setCurrentOptimizingIndex(i);
-        setShowOptimizationProgress(true);
+    if (formData.images.length === 0 && optimizedImages.length === 0) return uploadedUrls;
 
-        const urls = await optimizeAndUpload(
-          optimized,
-          undefined,
+    for (let i = 0; i < optimizedImages.length; i++) {
+      try {
+        const urls = await uploadOptimizedImage(
+          optimizedImages[i],
+          editId ?? undefined,
           (progress) => {
-            setOptimizationProgress(prev => new Map(prev).set(i, progress.progress));
+            setOptimizationProgress((prev) => {
+              const next = new Map(prev);
+              next.set(i, progress);
+              return next;
+            });
           }
         );
-
-        // Usar la versión large como imagen principal
         uploadedUrls.push(urls.large);
       } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
         console.error('Error subiendo imagen optimizada:', error);
         setToastMessage({
           type: 'error',
-          message: `Error al subir imagen ${i + 1}`
+          message: `Error al subir imagen ${i + 1}: ${detail}`,
         });
       }
     }
 
-    setShowOptimizationProgress(false);
-    setCurrentOptimizingIndex(-1);
     return uploadedUrls;
+  };
+
+  // Generar slug único — para propiedades nuevas siempre añade un sufijo único
+  // basado en timestamp para evitar conflictos sin depender de consultas RLS
+  const ensureUniqueSlug = async (baseSlug: string): Promise<string> => {
+    if (!editId) {
+      // Para propiedades NUEVAS: añadir siempre un sufijo corto único basado en timestamp
+      // Esto garantiza unicidad sin necesidad de consultar la DB (evita problemas de RLS)
+      const uniqueSuffix = Date.now().toString(36).slice(-5);
+      return `${baseSlug}-${uniqueSuffix}`;
+    }
+
+    // Para EDICIÓN: intentar mantener el slug actual de la BD si existe
+    try {
+      const { data: currentProp } = await supabase
+        .from('properties')
+        .select('slug')
+        .eq('id', editId)
+        .maybeSingle();
+
+      // Si el slug base no cambió respecto al guardado, conservar el existente
+      if (currentProp?.slug && currentProp.slug.startsWith(baseSlug)) {
+        return currentProp.slug;
+      }
+
+      // Si cambió, verificar que el nuevo no colisione con otras propiedades
+      const { data: conflicting } = await supabase
+        .from('properties')
+        .select('id')
+        .eq('slug', baseSlug)
+        .neq('id', editId)
+        .maybeSingle();
+
+      if (!conflicting) {
+        return baseSlug;
+      }
+
+      // Hay colisión: añadir sufijo único
+      const uniqueSuffix = Date.now().toString(36).slice(-5);
+      return `${baseSlug}-${uniqueSuffix}`;
+    } catch {
+      const uniqueSuffix = Date.now().toString(36).slice(-5);
+      return `${baseSlug}-${uniqueSuffix}`;
+    }
   };
 
   const handleSubmit = async () => {
     if (!validateStep(currentStep)) return;
-    
-    // Validar que el slug sea válido
+
     if (!generatedSlug || !isSlugValid) {
       setToastMessage({
         type: 'error',
-        message: 'No se pudo generar un slug válido. Verifica los datos del inmueble.'
+        message: 'No se pudo generar un slug válido. Verifica los datos del inmueble.',
       });
       return;
     }
@@ -416,26 +461,16 @@ export default function AddPropertyPage() {
     setIsSaving(true);
 
     try {
-      // Validar unicidad del slug
-      const isUnique = await validateSlugUniqueness(generatedSlug);
-      let finalSlug = generatedSlug;
-
-      if (!isUnique) {
-        // Generar slug único agregando sufijo numérico
-        finalSlug = await ensureUniqueSlug(generatedSlug);
-        setToastMessage({
-          type: 'info',
-          message: `El slug fue ajustado a: ${finalSlug}`
-        });
-      }
+      // Asegurar unicidad del slug antes de guardar
+      const finalSlug = await ensureUniqueSlug(generatedSlug);
 
       const imageUrls = await uploadImages();
 
       const statusMap: Record<string, string> = {
-        'borrador': 'Borrador',
-        'publicado': 'Publicado',
-        'vendido': 'Vendido',
-        'destacado': 'Destacado',
+        borrador: 'Borrador',
+        publicado: 'Publicado',
+        vendido: 'Vendido',
+        destacado: 'Destacado',
       };
 
       const propertyData = {
@@ -459,33 +494,68 @@ export default function AddPropertyPage() {
         features_external: formData.externalAmenities,
         description: formData.description.trim() || null,
         agent: formData.assignedAgent,
-        slug: finalSlug, // Agregar el slug generado
+        slug: finalSlug,
         updated_at: new Date().toISOString(),
       };
 
+      // Función auxiliar para obtener un slug alternativo garantizado único
+      const getEmergencySlug = () =>
+        `${finalSlug}-${Math.random().toString(36).slice(2, 8)}`;
+
+      let saved = false;
+
       if (editId) {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('properties')
           .update(propertyData)
           .eq('id', editId);
-        if (error) throw error;
+
+        if (error) {
+          if (error.code === '23505') {
+            // Conflicto de slug: reintentar con slug alternativo
+            const altSlug = getEmergencySlug();
+            const { error: retryError } = await supabase
+              .from('properties')
+              .update({ ...propertyData, slug: altSlug })
+              .eq('id', editId);
+            if (retryError) throw retryError;
+          } else {
+            throw error;
+          }
+        }
+        saved = true;
       } else {
-        const { error } = await supabase
+        let { error } = await supabase
           .from('properties')
           .insert([{ ...propertyData, created_at: new Date().toISOString() }]);
-        if (error) throw error;
+
+        if (error) {
+          if (error.code === '23505') {
+            // Conflicto de slug: reintentar con slug alternativo
+            const altSlug = getEmergencySlug();
+            const { error: retryError } = await supabase
+              .from('properties')
+              .insert([{ ...propertyData, slug: altSlug, created_at: new Date().toISOString() }]);
+            if (retryError) throw retryError;
+          } else {
+            throw error;
+          }
+        }
+        saved = true;
       }
 
-      setShowSuccessModal(true);
-      setToastMessage({
-        type: 'success',
-        message: editId ? 'Propiedad actualizada exitosamente' : 'Propiedad guardada exitosamente'
-      });
+      if (saved) {
+        setShowSuccessModal(true);
+        setToastMessage({
+          type: 'success',
+          message: editId ? 'Propiedad actualizada exitosamente' : 'Propiedad guardada exitosamente',
+        });
+      }
     } catch (error) {
       console.error('Error guardando propiedad:', error);
       setToastMessage({
         type: 'error',
-        message: 'Error al guardar la propiedad. Intenta nuevamente.'
+        message: 'Error al guardar la propiedad. Intenta nuevamente.',
       });
     } finally {
       setIsSaving(false);
@@ -755,49 +825,6 @@ export default function AddPropertyPage() {
     formData.bedrooms,
     formData.title,
   ]);
-
-  // Validar unicidad del slug antes de guardar
-  const validateSlugUniqueness = async (slug: string): Promise<boolean> => {
-    try {
-      const { data, error } = await supabase
-        .from('properties')
-        .select('id, slug')
-        .eq('slug', slug)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Error validando slug:', error);
-        return false;
-      }
-
-      // Si estamos editando, permitir el mismo slug si es de la misma propiedad
-      if (editId && data && data.id === editId) {
-        return true;
-      }
-
-      // Si existe otro inmueble con el mismo slug, no es válido
-      return !data;
-    } catch (error) {
-      console.error('Error validando slug:', error);
-      return false;
-    }
-  };
-
-  // Generar slug único si ya existe
-  const ensureUniqueSlug = async (baseSlug: string): Promise<string> => {
-    const { data, error } = await supabase
-      .from('properties')
-      .select('slug')
-      .like('slug', `${baseSlug}%`);
-
-    if (error) {
-      console.error('Error obteniendo slugs existentes:', error);
-      return baseSlug;
-    }
-
-    const existingSlugs = data?.map((p) => p.slug) || [];
-    return generateUniqueSlug(baseSlug, existingSlugs);
-  };
 
   if (isLoading) {
     return (
@@ -1081,7 +1108,7 @@ export default function AddPropertyPage() {
                   <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-start gap-3">
                     <i className="ri-information-line text-purple-600 text-xl mt-0.5"></i>
                     <div>
-                      <p className="text-sm font-semibold text-purple-900 mb-1">¿Qué es esto?</p>
+                      <p className="text-xs font-semibold text-purple-900 mb-1">¿Qué es esto?</p>
                       <p className="text-xs text-purple-700 mb-2">
                         Esta URL se genera automáticamente a partir de los datos del inmueble y está optimizada para aparecer en Google.
                       </p>
@@ -1227,7 +1254,7 @@ export default function AddPropertyPage() {
                     ].map(({ field, label, icon }) => (
                       <div key={field} className="bg-slate-50 rounded-xl p-6 border-2 border-slate-200">
                         <label className="block text-sm font-bold text-slate-700 mb-4 text-center">
-                          <i className={`${icon} text-teal-600 text-xl`}></i>
+                          <i className={`${icon} text-teal-600 text-lg`}></i>
                           <span className="block mt-2">{label}</span>
                         </label>
                         <div className="flex items-center justify-center gap-4">
@@ -1468,6 +1495,7 @@ export default function AddPropertyPage() {
                     <i className="ri-user-star-line text-teal-600 mr-1"></i>
                     Asignar Agente <span className="text-red-500">*</span>
                   </label>
+                  {/* Sección Agentes */}
                   {loadingAgents ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {[1, 2, 3, 4].map((i) => (
@@ -1493,28 +1521,37 @@ export default function AddPropertyPage() {
                       </button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {agents.map((agent) => (
-                        <button key={agent.id} type="button" onClick={() => handleInputChange('assignedAgent', agent.id)} className={`p-6 rounded-xl border-2 transition-all duration-300 flex items-center gap-4 cursor-pointer ${formData.assignedAgent === agent.id ? 'bg-teal-50 border-teal-500 shadow-md' : 'bg-white border-slate-200 hover:border-teal-300 hover:shadow-sm'}`}>
-                          <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white shadow-md flex-shrink-0 bg-slate-100">
-                            {agent.photo_url ? (
-                              <img src={agent.photo_url} alt={`${agent.first_name} ${agent.last_name}`} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center bg-teal-100">
-                                <i className="ri-user-line text-teal-600 text-xl"></i>
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex-1 text-left">
-                            <h4 className="font-bold text-slate-800">{agent.first_name} {agent.last_name}</h4>
-                            <p className="text-xs text-slate-500 mt-1"><i className="ri-phone-line mr-1"></i>{agent.phone}</p>
-                          </div>
-                          {formData.assignedAgent === agent.id && <i className="ri-checkbox-circle-fill text-teal-500 text-2xl"></i>}
-                        </button>
-                      ))}
-                    </div>
+                    <>
+                      <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${errors.assignedAgent ? 'p-3 border-2 border-red-300 rounded-xl bg-red-50' : ''}`}>
+                        {agents.map((agent) => (
+                          <button key={agent.id} type="button" onClick={() => {
+                            handleInputChange('assignedAgent', agent.id);
+                          }} className={`p-6 rounded-xl border-2 transition-all duration-300 flex items-center gap-4 cursor-pointer ${formData.assignedAgent === agent.id ? 'bg-teal-50 border-teal-500 shadow-md' : 'bg-white border-slate-200 hover:border-teal-300 hover:shadow-sm'}`}>
+                            <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white shadow-md flex-shrink-0 bg-slate-100">
+                              {agent.photo_url ? (
+                                <img src={agent.photo_url} alt={`${agent.first_name} ${agent.last_name}`} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center bg-teal-100">
+                                  <i className="ri-user-line text-teal-600 text-xl"></i>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 text-left">
+                              <h4 className="font-bold text-slate-800">{agent.first_name} {agent.last_name}</h4>
+                              <p className="text-xs text-slate-500 mt-1"><i className="ri-phone-line mr-1"></i>{agent.phone}</p>
+                            </div>
+                            {formData.assignedAgent === agent.id && <i className="ri-checkbox-circle-fill text-teal-500 text-2xl"></i>}
+                          </button>
+                        ))}
+                      </div>
+                      {errors.assignedAgent && (
+                        <div className="flex items-center gap-2 bg-red-50 border border-red-300 rounded-xl px-4 py-3 mt-2">
+                          <i className="ri-error-warning-fill text-red-500 text-lg flex-shrink-0"></i>
+                          <p className="text-sm text-red-700 font-medium">{errors.assignedAgent}</p>
+                        </div>
+                      )}
+                    </>
                   )}
-                  {errors.assignedAgent && <p className="text-xs text-red-600 mt-3 flex items-center gap-1"><i className="ri-error-warning-line"></i>{errors.assignedAgent}</p>}
                 </div>
 
                 <div>

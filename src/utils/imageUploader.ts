@@ -1,8 +1,8 @@
 /**
  * Utilidad para subir imágenes optimizadas a Supabase Storage
- * 
- * Funcionalidades:
- * - Sube múltiples versiones de cada imagen (thumbnail, medium, large, placeholder)
+ *
+ * BUCKET: "property-images" (público, ya existe en Supabase)
+ * - Sube 4 versiones por imagen: thumbnail, medium, large, placeholder
  * - Organiza las imágenes en carpetas por propiedad
  * - Retorna las URLs públicas de todas las versiones
  */
@@ -10,6 +10,11 @@
 import { supabase } from '../lib/supabase';
 import { OptimizedImage } from './imageOptimizer';
 
+// ─── Constante centralizada del bucket ───────────────────────────────────────
+// Cambiar aquí si alguna vez se renombra el bucket en Supabase
+export const STORAGE_BUCKET = 'property-images' as const;
+
+// ─── Tipos ───────────────────────────────────────────────────────────────────
 export interface UploadedImageUrls {
   thumbnail: string;
   medium: string;
@@ -17,118 +22,113 @@ export interface UploadedImageUrls {
   placeholder: string;
 }
 
+// ─── Helpers privados ────────────────────────────────────────────────────────
+
 /**
- * Genera un nombre único para el archivo
+ * Genera un nombre BASE único compartido para las 4 versiones de una imagen.
+ * Formato: {nombreLimpio}-{timestamp}-{random}
+ * Cada versión agrega su sufijo: -thumbnail.webp, -medium.webp, etc.
  */
-const generateUniqueFileName = (originalName: string, size: string): string => {
+const generateBaseFileName = (originalName: string): string => {
   const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(7);
-  const extension = 'webp'; // Todas las imágenes optimizadas son WebP
+  const random = Math.random().toString(36).substring(2, 8);
   const cleanName = originalName
-    .replace(/\.[^/.]+$/, '') // Remover extensión original
-    .replace(/[^a-zA-Z0-9]/g, '-') // Reemplazar caracteres especiales
+    .replace(/\.[^/.]+$/, '')
+    .replace(/[^a-zA-Z0-9]/g, '-')
     .toLowerCase()
-    .substring(0, 30); // Limitar longitud
-  
-  return `${cleanName}-${size}-${timestamp}-${random}.${extension}`;
+    .substring(0, 30);
+  return `${cleanName}-${timestamp}-${random}`;
 };
 
 /**
- * Sube una imagen optimizada a Supabase Storage
+ * Sube un blob al bucket de Supabase Storage.
+ * Retorna la URL pública del archivo subido.
+ *
+ * @throws {Error} Si el bucket no existe o si hay un error de permisos/red
  */
 const uploadImageBlob = async (
   blob: Blob,
   fileName: string,
   propertyId?: string
 ): Promise<string> => {
-  try {
-    // Construir la ruta del archivo
-    const folder = propertyId ? `properties/${propertyId}` : 'properties/temp';
-    const filePath = `${folder}/${fileName}`;
+  const folder = propertyId ? `properties/${propertyId}` : 'properties/temp';
+  const filePath = `${folder}/${fileName}`;
 
-    // Subir el archivo
-    const { error: uploadError } = await supabase.storage
-      .from('property-images')
-      .upload(filePath, blob, {
-        contentType: 'image/webp',
-        cacheControl: '31536000', // Cache por 1 año
-        upsert: false,
-      });
+  const { error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(filePath, blob, {
+      contentType: 'image/webp',
+      cacheControl: '31536000', // Cache por 1 año
+      upsert: true,             // upsert:true evita el error "already exists"
+    });
 
-    if (uploadError) {
-      console.error('Error subiendo imagen:', uploadError);
-      throw uploadError;
-    }
-
-    // Obtener URL pública
-    const { data: { publicUrl } } = supabase.storage
-      .from('property-images')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
-  } catch (error) {
-    console.error('Error en uploadImageBlob:', error);
-    throw error;
+  if (uploadError) {
+    // Mensaje descriptivo para facilitar el diagnóstico
+    console.error(`[Storage] Error subiendo "${filePath}" al bucket "${STORAGE_BUCKET}":`, uploadError);
+    throw new Error(
+      `No se pudo subir la imagen "${fileName}". ` +
+      `Bucket: "${STORAGE_BUCKET}". ` +
+      `Detalle: ${uploadError.message}`
+    );
   }
+
+  // Obtener URL pública
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(filePath);
+
+  return publicUrl;
 };
 
+// ─── API pública ─────────────────────────────────────────────────────────────
+
 /**
- * Sube todas las versiones de una imagen optimizada
+ * Sube todas las versiones de una imagen optimizada al bucket.
+ * Retorna un objeto con las URLs públicas de las 4 versiones.
  */
 export const uploadOptimizedImage = async (
   optimizedImage: OptimizedImage,
   propertyId?: string,
   onProgress?: (progress: number) => void
 ): Promise<UploadedImageUrls> => {
-  try {
-    const baseName = optimizedImage.originalName;
+  // Nombre base compartido → las 4 versiones son reconstruibles
+  const baseName = generateBaseFileName(optimizedImage.originalName);
 
-    // Subir thumbnail (25%)
-    onProgress?.(25);
-    const thumbnailUrl = await uploadImageBlob(
-      optimizedImage.thumbnail,
-      generateUniqueFileName(baseName, 'thumbnail'),
-      propertyId
-    );
+  onProgress?.(10);
+  const thumbnailUrl = await uploadImageBlob(
+    optimizedImage.thumbnail,
+    `${baseName}-thumbnail.webp`,
+    propertyId
+  );
 
-    // Subir medium (50%)
-    onProgress?.(50);
-    const mediumUrl = await uploadImageBlob(
-      optimizedImage.medium,
-      generateUniqueFileName(baseName, 'medium'),
-      propertyId
-    );
+  onProgress?.(40);
+  const mediumUrl = await uploadImageBlob(
+    optimizedImage.medium,
+    `${baseName}-medium.webp`,
+    propertyId
+  );
 
-    // Subir large (75%)
-    onProgress?.(75);
-    const largeUrl = await uploadImageBlob(
-      optimizedImage.large,
-      generateUniqueFileName(baseName, 'large'),
-      propertyId
-    );
+  onProgress?.(70);
+  const largeUrl = await uploadImageBlob(
+    optimizedImage.large,
+    `${baseName}-large.webp`,
+    propertyId
+  );
 
-    // Subir placeholder (100%)
-    onProgress?.(100);
-    const placeholderUrl = await uploadImageBlob(
-      optimizedImage.placeholder,
-      generateUniqueFileName(baseName, 'placeholder'),
-      propertyId
-    );
+  onProgress?.(90);
+  const placeholderUrl = await uploadImageBlob(
+    optimizedImage.placeholder,
+    `${baseName}-placeholder.webp`,
+    propertyId
+  );
 
-    return {
-      thumbnail: thumbnailUrl,
-      medium: mediumUrl,
-      large: largeUrl,
-      placeholder: placeholderUrl,
-    };
-  } catch (error) {
-    console.error('Error subiendo imagen optimizada:', error);
-    throw error;
-  }
+  onProgress?.(100);
+
+  return { thumbnail: thumbnailUrl, medium: mediumUrl, large: largeUrl, placeholder: placeholderUrl };
 };
 
 /**
- * Sube múltiples imágenes optimizadas
+ * Sube múltiples imágenes optimizadas en secuencia.
  */
 export const uploadOptimizedImages = async (
   optimizedImages: OptimizedImage[],
@@ -150,35 +150,56 @@ export const uploadOptimizedImages = async (
 };
 
 /**
- * Elimina una imagen y todas sus versiones de Supabase Storage
+ * Elimina una imagen y todas sus versiones de Supabase Storage.
+ * No lanza error si el archivo no existe o la URL es inválida.
  */
 export const deleteImageFromStorage = async (imageUrl: string): Promise<void> => {
   try {
-    // Extraer la ruta del archivo de la URL
     const url = new URL(imageUrl);
-    const pathParts = url.pathname.split('/property-images/');
-    if (pathParts.length < 2) return;
+    // La ruta del objeto está después del nombre del bucket en la URL pública
+    const marker = `/${STORAGE_BUCKET}/`;
+    const markerIndex = url.pathname.indexOf(marker);
+    if (markerIndex === -1) return;
 
-    const filePath = pathParts[1];
+    const filePath = url.pathname.substring(markerIndex + marker.length);
 
-    // Eliminar el archivo
-    const { error } = await supabase.storage
-      .from('property-images')
-      .remove([filePath]);
+    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([filePath]);
 
     if (error) {
-      console.error('Error eliminando imagen:', error);
+      console.warn(`[Storage] No se pudo eliminar "${filePath}":`, error.message);
     }
-  } catch (error) {
-    console.error('Error en deleteImageFromStorage:', error);
+  } catch (err) {
+    console.warn('[Storage] Error en deleteImageFromStorage:', err);
   }
 };
 
 /**
- * Elimina múltiples imágenes de Supabase Storage
+ * Elimina múltiples imágenes de Supabase Storage.
  */
 export const deleteImagesFromStorage = async (imageUrls: string[]): Promise<void> => {
-  for (const url of imageUrls) {
-    await deleteImageFromStorage(url);
+  await Promise.allSettled(imageUrls.map(deleteImageFromStorage));
+};
+
+/**
+ * Verifica que el bucket esté accesible desde el cliente actual.
+ * Usa list() en lugar de getBucket() porque getBucket() requiere
+ * service role key y siempre falla desde el frontend.
+ * Retorna true si el bucket es accesible, false si hay un error.
+ */
+export const verifyStorageBucket = async (): Promise<boolean> => {
+  try {
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .list('', { limit: 1 });
+
+    if (error) {
+      console.error(`[Storage] Bucket "${STORAGE_BUCKET}" no accesible:`, error.message);
+      return false;
+    }
+    console.info(`[Storage] Bucket "${STORAGE_BUCKET}" verificado correctamente.`);
+    return true;
+  } catch (err) {
+    console.error('[Storage] Error verificando bucket:', err);
+    return false;
   }
 };

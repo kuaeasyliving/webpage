@@ -233,6 +233,27 @@ export const useImageOptimization = () => {
   );
 
   /**
+   * Sube una imagen ya optimizada a Supabase (alias compatible con la firma usada en el formulario)
+   */
+  const optimizeAndUpload = useCallback(
+    async (
+      optimizedImage: OptimizedImage,
+      propertyId?: string,
+      onProgress?: (progress: { progress: number }) => void
+    ): Promise<UploadedImageUrls> => {
+      const urls = await uploadOptimizedImage(
+        optimizedImage,
+        propertyId,
+        (progress: number) => {
+          onProgress?.({ progress });
+        }
+      );
+      return urls;
+    },
+    []
+  );
+
+  /**
    * Calcula estadísticas de compresión
    */
   const getCompressionStats = useCallback(
@@ -290,6 +311,7 @@ export const useImageOptimization = () => {
     uploadSingleImage,
     processAndUploadImage,
     processAndUploadMultipleImages,
+    optimizeAndUpload,
     getCompressionStats,
     reset,
     clearError,
