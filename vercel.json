@@ -1,30 +1,19 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "out",
-  "rewrites": [
-    {
-      "source": "/arriendo/:slug",
-      "destination": "/api/prerender?operation=arriendo&slug=:slug"
-    },
-    {
-      "source": "/venta/:slug",
-      "destination": "/api/prerender?operation=venta&slug=:slug"
-    },
-    {
-      "source": "/renta-corta/:slug",
-      "destination": "/api/prerender?operation=renta-corta&slug=:slug"
-    },
-    {
-      "source": "/arriendo-tradicional/:slug",
-      "destination": "/api/prerender?operation=arriendo-tradicional&slug=:slug"
-    },
-    {
-      "source": "/arriendo-renta-corta/:slug",
-      "destination": "/api/prerender?operation=arriendo-renta-corta&slug=:slug"
-    },
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
+  "functions": {
+    "api/prerender.ts": {
+      "memory": 256,
+      "maxDuration": 10
     }
+  },
+  "routes": [
+    { "src": "/arriendo/(.*)",            "dest": "/api/prerender" },
+    { "src": "/venta/(.*)",               "dest": "/api/prerender" },
+    { "src": "/renta-corta/(.*)",         "dest": "/api/prerender" },
+    { "src": "/arriendo-tradicional/(.*)", "dest": "/api/prerender" },
+    { "src": "/arriendo-renta-corta/(.*)", "dest": "/api/prerender" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
