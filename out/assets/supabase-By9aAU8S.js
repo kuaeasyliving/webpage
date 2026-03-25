@@ -1,0 +1,1 @@
+import{c as e}from"./supabase-nUX3Wz0M.js";const s="https://qyedksvaanepyupemsxb.supabase.co",a="sb_publishable_QAOjepxrmF1KOP3MTI6jVg_hjrWJKv8",o=e(s,a),r=["id","title","slug","operation","type","price","currency","city","neighborhood","department","images","status","bedrooms","bathrooms","parking","area_built","area_private"].join(",");export{r as P,o as s};
