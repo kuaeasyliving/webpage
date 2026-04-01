@@ -41,18 +41,13 @@ function formatPrice(price: number) {
 
 // ── READ INDEX.HTML (SIN 206) ───────────────────────────────────────
 function readHtml(): string | null {
-  const paths = [
-    path.join(process.cwd(), 'dist/index.html'),
-    path.join(process.cwd(), 'out/index.html'),
-  ];
-
-  for (const p of paths) {
-    try {
-      return fs.readFileSync(p, 'utf-8');
-    } catch {}
+  try {
+    const filePath = path.join(process.cwd(), 'out', 'index.html');
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch (e) {
+    console.error("ERROR leyendo HTML:", e);
+    return null;
   }
-
-  return null;
 }
 
 // ── FETCH PROPERTY ──────────────────────────────────────────────────
@@ -122,9 +117,9 @@ export default async function handler(req: any, res: any) {
 
   const baseHtml = readHtml();
 
-  if (!baseHtml) {
-    return send(res, '<html><body>Error</body></html>');
-  }
+ if (!baseHtml) {
+  return send(res, '<!doctype html><html><body><div id="root"></div></body></html>');
+}
 
   // Parse URL
   const url = new URL(req.url, SITE_ORIGIN);
@@ -147,6 +142,7 @@ export default async function handler(req: any, res: any) {
   const meta = buildMeta(property, `${SITE_ORIGIN}${url.pathname}`);
   const html = inject(baseHtml, meta);
 
+  console.log("PRERENDER HIT:", req.url);
   console.log("USER AGENT:", ua);
   return send(res, html);
   res.status(200).send(html);
