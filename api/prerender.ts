@@ -133,9 +133,9 @@ export default async function handler(req: any, res: any) {
   const slug = parts.slice(1).join('/');
 
   // 👉 Si NO es bot → SPA normal
-  if (!isBot(ua)) {
-    return send(res, baseHtml);
-  }
+  if (!slug) {
+  return send(res, baseHtml);
+}
 
   // 👉 BOT → prerender
   const property = await getProperty(slug);
@@ -147,5 +147,7 @@ export default async function handler(req: any, res: any) {
   const meta = buildMeta(property, `${SITE_ORIGIN}${url.pathname}`);
   const html = inject(baseHtml, meta);
 
+  console.log("USER AGENT:", ua);
   return send(res, html);
+  res.status(200).send(html);
 }
