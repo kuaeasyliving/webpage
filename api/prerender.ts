@@ -52,22 +52,30 @@ function readHtml(): string | null {
 
 // ── FETCH PROPERTY ──────────────────────────────────────────────────
 async function getProperty(slug: string) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/properties?slug=eq.${slug}&select=*&limit=1`;
 
-  const url = `${SUPABASE_URL}/rest/v1/properties?slug=eq.${slug}&select=*&limit=1`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    });
 
-  const res = await fetch(url, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-  });
+    if (!res.ok) {
+      console.error("SUPABASE ERROR:", res.status);
+      return null;
+    }
 
-  if (!res.ok) return null;
+    const data = await res.json();
+    return data[0] || null;
 
-  const data = await res.json();
-  return data[0] || null;
+  } catch (e) {
+    console.error("FETCH ERROR:", e);
+    return null;
+  }
 }
+
 
 // ── BUILD META TAGS ─────────────────────────────────────────────────
 function buildMeta(property: any, url: string) {
@@ -144,6 +152,7 @@ export default async function handler(req: any, res: any) {
 
   console.log("PRERENDER HIT:", req.url);
   console.log("USER AGENT:", ua);
-  return send(res, html);
   res.status(200).send(html);
+  return send(res, html);
+ 
 }
