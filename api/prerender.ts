@@ -150,6 +150,8 @@ export default async function handler(req: any, res: any) {
   const meta = buildMeta(property, `${SITE_ORIGIN}${url.pathname}`);
   const html = inject(baseHtml, meta);
 
+  const rawImage = (images && images.length > 0) ? images[0] : ''
+
   console.log("PRERENDER HIT:", req.url);
   console.log("USER AGENT:", ua);
   res.status(200).send(html);
