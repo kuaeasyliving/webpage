@@ -16,7 +16,7 @@ export default defineConfig({
   plugins: [
     react(),
   ],
-  base: '/',
+ base: './',
   build: {
     sourcemap: false,
     outDir: "out",
