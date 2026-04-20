@@ -16,7 +16,7 @@ export default defineConfig({
   plugins: [
     react(),
   ],
-  base,
+  base: '/',
   build: {
     sourcemap: false,
     outDir: "out",
@@ -46,3 +46,4 @@ export default defineConfig({
     host: "0.0.0.0",
   },
 });
+

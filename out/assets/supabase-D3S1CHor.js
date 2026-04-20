@@ -1,0 +1,1 @@
+import{c as e}from"./supabase-DUsxFU08.js";const a=void 0,s=void 0,o=e(a,s),n=["id","title","slug","operation","type","price","currency","city","neighborhood","department","images","status","bedrooms","bathrooms","parking","area_built","area_private"].join(",");export{n as P,o as s};
