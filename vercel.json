@@ -1,4 +1,10 @@
 {
+
+
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/" }
+  ],
+
   "buildCommand": "npm run build",
   "outputDirectory": "out",
   "functions": {
@@ -17,4 +23,6 @@
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
+  
 }
+
